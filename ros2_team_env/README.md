@@ -7,7 +7,7 @@ Ubuntu 22.04 기반 ROS2 Humble + MoveIt2 + Gazebo 개발환경입니다.
 * Docker Desktop
 * Git
 
-Windows 사용자는 Docker Desktop 설치 후 WSL2 활성화를 권장합니다.
+ros_team_env 폴더를 홈디렉토리(유저이름) 폴더에 놓고, 도커 데스크탑 실행 후 아래대로 실행?
 
 ---
 
