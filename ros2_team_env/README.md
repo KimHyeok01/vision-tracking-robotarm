@@ -29,11 +29,20 @@ docker compose build
 ---
 
 # Run Container
-
+1회 테스트용
 ```bash
 docker compose run --rm ros2
-```
 
+```
+## 
+컨테이너 백그라운드 설정
+```bash
+# 처음 한 번 세팅
+docker compose up -d  
+
+# 작업마다 실행
+docker compose exec ros2 bash
+```
 정상적으로 실행되면 아래와 비슷한 프롬프트가 나타납니다.
 
 ```bash
@@ -92,3 +101,6 @@ source install/setup.bash
 * Mac Apple Silicon에서는 RViz/Gazebo GUI가 정상 동작하지 않을 수 있습니다.
 * Windows에서는 WSL2 기반 Docker 사용을 권장합니다.
 * Windows CMD 환경에서 RViz GUI를 사용하려면 VcXsrv 등의 X11 서버가 필요할 수 있습니다.
+
+
+
