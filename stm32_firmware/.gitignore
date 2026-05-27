@@ -1,0 +1,24 @@
+# 빌드 산출물
+Debug/
+Release/
+bin/
+obj/
+
+# 확장자 규칙
+*.o
+*.d
+*.su
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.cxstat
+*.dep
+
+*.tmp
+*_backup
+.mxproject
+.settings/
+*.launch
+TargetBuild.xml
