@@ -8,6 +8,7 @@ vision-tracking-robotarm/
 ├──  opencv/             # OpenCV 기반 영상 처리 및 타겟 추적 알고리즘 소스
 ├──  stm32_firmware/     # STM32CubeIDE 기반 로봇암 제어 펌웨어 (C/C++)
 └──  mechanical_design/  # 로봇암 기구 설계 데이터 (STEP, STL 등 CAD 파일)
+```
 
 ##  Phase 1: 시스템 아키텍처 및 환경 구축
 본격적인 개발에 앞서 소프트웨어 및 통신 환경을 표준화합니다.
