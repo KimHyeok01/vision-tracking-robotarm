@@ -1,0 +1,13 @@
+build/
+install/
+log/
+
+*.pyc
+__pycache__/
+
+.env
+*.key
+*.secret
+
+# Onshape credentials should never be committed
+.bashrc

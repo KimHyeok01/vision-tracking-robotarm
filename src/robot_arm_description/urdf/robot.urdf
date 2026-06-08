@@ -1,0 +1,45 @@
+<?xml version="1.0" ?>
+<!-- Generated using onshape-to-robot -->
+<!-- Onshape document_id: a60c130b936cc49845e64be8 / workspace_id: 5dd6517471cd705938c34336 -->
+<robot name="robot_arm_description">
+  <!-- Link base -->
+  <link name="base">
+    <inertial>
+      <origin xyz="-0.00276498 2.36186e-05 0.0191522" rpy="0 0 0"/>
+      <mass value="0.166326"/>
+      <inertia ixx="0.000179416" ixy="3.0512e-08" ixz="-8.17984e-07" iyy="0.000170528" iyz="-2.807e-09" izz="0.000321583"/>
+    </inertial>
+    <!-- Part base -->
+    <visual>
+      <origin xyz="-0.000621801 0 0.0285404" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://robot_arm_description/meshes/base.stl"/>
+      </geometry>
+      <material name="base_material">
+        <color rgba="0.615686 0.811765 0.929412 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.000621801 0 0.0285404" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://robot_arm_description/meshes/base.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part servo1 -->
+    <visual>
+      <origin xyz="0.0097773 0.0001 0.000546342" rpy="1.5708 0 3.14159"/>
+      <geometry>
+        <mesh filename="package://robot_arm_description/meshes/servo1.stl"/>
+      </geometry>
+      <material name="servo1_material">
+        <color rgba="0.301961 0.301961 0.301961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.0097773 0.0001 0.000546342" rpy="1.5708 0 3.14159"/>
+      <geometry>
+        <mesh filename="package://robot_arm_description/meshes/servo1.stl"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>
