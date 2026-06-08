@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "ir_remote.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,6 +55,10 @@ TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart2;
 
+volatile uint32_t ir_raw_buf[100]; // 데이터를 순서대로 담을 큰 상자
+volatile uint8_t ir_idx = 0;       // 현재 몇 번째 방에 넣고 있는지 가리키는 주소록
+volatile uint8_t rx_done = 0;      // "리모컨 한 패킷 수신이 끝났다"를 메인에 알릴 플래그
+
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -76,20 +81,58 @@ void Servo_Set_Angle(uint32_t channel, float angle)
 }
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim){
+
+
+
+
+  if(htim == &htim3)
+      {
+          if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+          {
+              uint32_t total_period = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
+              uint32_t high_duration = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2);
+
+              if (total_period > 8000 && high_duration > 4000)
+                          {
+                              ir_idx = 0;   // 새 신호가 시작되었으니 저장 위치를 처음(0)으로 리셋!
+                              rx_done = 0;  // 메인 루프에게 아직 수신 중이라고 알림
+                          }
+                          // [케이스 B] 리더 펄스가 아닌 일반 데이터 비트(1120us, 2250us 등)가 들어온 경우
+              else
+                          {
+                              // 조건: 인덱스가 배열 크기(100)를 넘지 않도록 안전장치를 걸고 저장
+                              if (ir_idx < 100)
+                              {
+                        	  ir_raw_buf[ir_idx++] = total_period;
+
+
+                              }
+
+                          }
+          }
+      }
+
+  /*
   if(htim==&htim3)
     {
       if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
 	{
-	  ir_val = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
-	  int len =sprintf(tx_buffer, "falling var: %d\r\n", ir_val);
-	  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+	  if(start_flag == 0 && 8000<(ir_val = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1)))
+	      {
+		if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2 && (4000<(ir_val = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2))))
+		  int len =sprintf(tx_buffer, "start\r\n");
+	      	  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+
+	      }
+	  //int len =sprintf(tx_buffer, "falling var: %d\r\n", ir_val);
+	  //HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
 	}
       else{
 	  ir_val = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2);
-	  int len = sprintf(tx_buffer, "raising var: %d\r\n", ir_val);
-	  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+	  //int len = sprintf(tx_buffer, "raising var: %d\r\n", ir_val);
+	  //HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
       }
-    }
+    }*/
 }
 /* USER CODE END PFP */
 
@@ -139,6 +182,10 @@ int main(void)
   Servo_Set_Angle(TIM_CHANNEL_2,SET_ZERO);
 
   uint32_t debug_counter = 0;	// set tera term
+
+  uint32_t last_ir_tick = 0;   // 마지막으로 IR 인터럽트가 발생한 시점의 틱 저장
+    uint8_t last_ir_idx = 0;
+    uint8_t target_key = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -146,7 +193,7 @@ int main(void)
 
   while (1)
   {
-    for(int i=0; i < 5; i++)
+    /*for(int i=0; i < 5; i++)
       {
 	Servo_Set_Angle(TIM_CHANNEL_1,M1_Arr[i]);
 	Servo_Set_Angle(TIM_CHANNEL_2,M2_Arr[i]);
@@ -154,8 +201,62 @@ int main(void)
 	//int len = sprintf(tx_buffer, "STM32F103RB Alive! Count: %lu\r\n", debug_counter++);
 	//HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
 	HAL_Delay(2000);
-      }
+      }*/
+      if (ir_idx != last_ir_idx)
+            {
+                last_ir_idx = ir_idx;
+                last_ir_tick = HAL_GetTick(); // 최신 인터럽트 발생 시간 백업
+            }
 
+            // 2. 버퍼에 데이터가 쌓이기 시작했고(ir_idx > 0),
+            //    마지막 인터럽트가 발생한 지 40ms가 지났다면? -> [논블로킹 완료 판정]
+            if (ir_idx > 0 && (HAL_GetTick() - last_ir_tick > 40))
+            {
+                // 분리해 둔 소스파일 함수를 호출하여 8비트 Hex 키값 추출
+                target_key = IR_Decode_Packet(ir_raw_buf, ir_idx);
+
+                // 디버깅용 로그 출력
+                int len = sprintf(tx_buffer, "\r\n[Decoded Key]: 0x%02X (Bits: %d)\r\n", target_key, ir_idx);
+                HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+
+                // 케이스문 진입 및 명령어 검증 출력
+                switch (target_key)
+                {
+                    case IR_KEY_POWER:
+                        len = sprintf(tx_buffer, ">> COMMAND: POWER BUTTON DETECTED <<\r\n");
+                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+                        break;
+
+                    case IR_KEY_UP:
+                        len = sprintf(tx_buffer, ">> COMMAND: MOVE UP <<\r\n");
+                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+                        break;
+
+                    case IR_KEY_DOWN:
+                        len = sprintf(tx_buffer, ">> COMMAND: MOVE DOWN <<\r\n");
+                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+                        break;
+
+                    case IR_KEY_RIGHT:
+                        len = sprintf(tx_buffer, ">> COMMAND: MOVE RIGHT <<\r\n");
+                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+                        break;
+
+                    case IR_KEY_LEFT:
+                        len = sprintf(tx_buffer, ">> COMMAND: MOVE LEFT <<\r\n");
+                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+                        break;
+
+                    default:
+                        len = sprintf(tx_buffer, ">> COMMAND: UNKNOWN KEY (0x%02X) <<\r\n", target_key);
+                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+                        break;
+                }
+
+                // 다음 패킷 수신을 위한 변수들 원점 복귀
+                ir_idx = 0;
+                last_ir_idx = 0;
+            }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
