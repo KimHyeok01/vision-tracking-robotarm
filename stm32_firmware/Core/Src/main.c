@@ -82,35 +82,36 @@ void Servo_Set_Angle(uint32_t channel, float angle)
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim){
 
+	if (htim == &htim3)
+	    {
+	        if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+	        {
+	            uint32_t total_period = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
+	            uint32_t high_duration = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2);
 
+	            // 1. 리더 펄스(시작 신호)가 들어오면 버퍼 인덱스 초기화 및 플래그 리셋
+	            if (total_period > 8000 && high_duration > 4000)
+	            {
+	                ir_idx = 0;
+	                rx_done = 0;
+	            }
+	            // 2. 일반 데이터 비트 적재 구역
+	            else
+	            {
+	                // 이미 한 패킷(32비트) 처리가 끝나 메인 루프가 파싱 중이면 다음 리더 펄스 전까지 적재 중단
+	                if (rx_done == 0 && ir_idx < 32)
+	                {
+	                    ir_raw_buf[ir_idx++] = total_period;
 
+	                    if (ir_idx == 32)
+	                    {
+	                        rx_done = 1; // 메인 루프에게 즉시 파싱하라고 통보
+	                    }
+	                }
+	            }
+	        }
+	    }
 
-  if(htim == &htim3)
-      {
-          if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
-          {
-              uint32_t total_period = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
-              uint32_t high_duration = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2);
-
-              if (total_period > 8000 && high_duration > 4000)
-                          {
-                              ir_idx = 0;   // 새 신호가 시작되었으니 저장 위치를 처음(0)으로 리셋!
-                              rx_done = 0;  // 메인 루프에게 아직 수신 중이라고 알림
-                          }
-                          // [케이스 B] 리더 펄스가 아닌 일반 데이터 비트(1120us, 2250us 등)가 들어온 경우
-              else
-                          {
-                              // 조건: 인덱스가 배열 크기(100)를 넘지 않도록 안전장치를 걸고 저장
-                              if (ir_idx < 100)
-                              {
-                        	  ir_raw_buf[ir_idx++] = total_period;
-
-
-                              }
-
-                          }
-          }
-      }
 
   /*
   if(htim==&htim3)
@@ -183,9 +184,7 @@ int main(void)
 
   uint32_t debug_counter = 0;	// set tera term
 
-  uint32_t last_ir_tick = 0;   // 마지막으로 IR 인터럽트가 발생한 시점의 틱 저장
-    uint8_t last_ir_idx = 0;
-    uint8_t target_key = 0;
+  uint8_t target_key = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -202,61 +201,53 @@ int main(void)
 	//HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
 	HAL_Delay(2000);
       }*/
-      if (ir_idx != last_ir_idx)
-            {
-                last_ir_idx = ir_idx;
-                last_ir_tick = HAL_GetTick(); // 최신 인터럽트 발생 시간 백업
-            }
+	  if (rx_done == 1)
+	        {
+	            // 드라이버 함수 호출하여 32비트 데이터셋 기반 키 추출
+	            target_key = IR_Decode_Packet(ir_raw_buf, ir_idx);
 
-            // 2. 버퍼에 데이터가 쌓이기 시작했고(ir_idx > 0),
-            //    마지막 인터럽트가 발생한 지 40ms가 지났다면? -> [논블로킹 완료 판정]
-            if (ir_idx > 0 && (HAL_GetTick() - last_ir_tick > 40))
-            {
-                // 분리해 둔 소스파일 함수를 호출하여 8비트 Hex 키값 추출
-                target_key = IR_Decode_Packet(ir_raw_buf, ir_idx);
+	            // 테라텀 로깅 및 검증
+	            int len = sprintf(tx_buffer, "\r\n[Decoded Key]: 0x%02X\r\n", target_key);
+	            HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
 
-                // 디버깅용 로그 출력
-                int len = sprintf(tx_buffer, "\r\n[Decoded Key]: 0x%02X (Bits: %d)\r\n", target_key, ir_idx);
-                HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+	            switch (target_key)
+	            {
+	                case IR_KEY_POWER:
+	                    len = sprintf(tx_buffer, ">> COMMAND: POWER BUTTON DETECTED <<\r\n");
+	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+	                    break;
 
-                // 케이스문 진입 및 명령어 검증 출력
-                switch (target_key)
-                {
-                    case IR_KEY_POWER:
-                        len = sprintf(tx_buffer, ">> COMMAND: POWER BUTTON DETECTED <<\r\n");
-                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-                        break;
+	                case IR_KEY_UP:
+	                    len = sprintf(tx_buffer, ">> COMMAND: MOVE UP <<\r\n");
+	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+	                    // Servo_Set_Angle(TIM_CHANNEL_1, ...); 연동
+	                    break;
 
-                    case IR_KEY_UP:
-                        len = sprintf(tx_buffer, ">> COMMAND: MOVE UP <<\r\n");
-                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-                        break;
+	                case IR_KEY_DOWN:
+	                    len = sprintf(tx_buffer, ">> COMMAND: MOVE DOWN <<\r\n");
+	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+	                    break;
 
-                    case IR_KEY_DOWN:
-                        len = sprintf(tx_buffer, ">> COMMAND: MOVE DOWN <<\r\n");
-                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-                        break;
+	                case IR_KEY_RIGHT:
+	                    len = sprintf(tx_buffer, ">> COMMAND: MOVE RIGHT <<\r\n");
+	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+	                    break;
 
-                    case IR_KEY_RIGHT:
-                        len = sprintf(tx_buffer, ">> COMMAND: MOVE RIGHT <<\r\n");
-                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-                        break;
+	                case IR_KEY_LEFT:
+	                    len = sprintf(tx_buffer, ">> COMMAND: MOVE LEFT <<\r\n");
+	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+	                    break;
 
-                    case IR_KEY_LEFT:
-                        len = sprintf(tx_buffer, ">> COMMAND: MOVE LEFT <<\r\n");
-                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-                        break;
+	                default:
+	                    len = sprintf(tx_buffer, ">> COMMAND: UNKNOWN KEY (0x%02X) <<\r\n", target_key);
+	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+	                    break;
+	            }
 
-                    default:
-                        len = sprintf(tx_buffer, ">> COMMAND: UNKNOWN KEY (0x%02X) <<\r\n", target_key);
-                        HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-                        break;
-                }
-
-                // 다음 패킷 수신을 위한 변수들 원점 복귀
-                ir_idx = 0;
-                last_ir_idx = 0;
-            }
+	            // [중요] 디코딩 처리가 완료되었으므로, 다음 리모컨 패킷을 받기 위해 플래그 완전 초기화
+	            ir_idx = 0;
+	            rx_done = 0;
+	        }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
