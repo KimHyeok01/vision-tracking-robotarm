@@ -13,5 +13,7 @@
 #define IR_KEY_LEFT   0x70
 
 uint8_t IR_Decode_Packet(volatile uint32_t* raw_buf, uint8_t length);
+void IR_Complete_Callback(uint8_t key);
+void IR_Handle_Interrupt(TIM_HandleTypeDef *htim, UART_HandleTypeDef *huart);
 
 #endif /* INC_IR_REMOTE_H_ */

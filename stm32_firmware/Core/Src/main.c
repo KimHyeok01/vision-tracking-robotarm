@@ -23,18 +23,15 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "ir_remote.h"
+#include "servo_motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-#define	SET_ZERO	0.0f
-#define	SET_CENTER	135.0f
-#define	SET_LIMIT	270.0f
-
-float M1_Arr[5] = { 90.0, 110.0,135.0,150.0,170.0};
-float M2_Arr[5] = { 0.0, 15.0,45.0,60.0,90.0};
-
 char tx_buffer[50];
+
+uint8_t remote_key;
+volatile uint8_t remote_done_flag = 0;
 
 uint32_t ir_val;
 /* USER CODE END PTD */
@@ -55,10 +52,6 @@ TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart2;
 
-volatile uint32_t ir_raw_buf[100]; // 데이터를 순서대로 담을 큰 상자
-volatile uint8_t ir_idx = 0;       // 현재 몇 번째 방에 넣고 있는지 가리키는 주소록
-volatile uint8_t rx_done = 0;      // "리모컨 한 패킷 수신이 끝났다"를 메인에 알릴 플래그
-
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -70,70 +63,12 @@ static void MX_TIM2_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
-void Servo_Set_Angle(uint32_t channel, float angle)
-{
-    if (angle < 0.0f)   angle = 0.0f;
-    if (angle > 270.0f) angle = 270.0f;
-
-    uint32_t pulse_width = (uint32_t)(500.0f + (angle * 2000.0f / 270.0f));
-
-    __HAL_TIM_SET_COMPARE(&htim2, channel, pulse_width);
-}
-
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim){
 
-	if (htim == &htim3)
+	if (htim->Instance == TIM3)
 	    {
-	        if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
-	        {
-	            uint32_t total_period = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
-	            uint32_t high_duration = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2);
-
-	            // 1. 리더 펄스(시작 신호)가 들어오면 버퍼 인덱스 초기화 및 플래그 리셋
-	            if (total_period > 8000 && high_duration > 4000)
-	            {
-	                ir_idx = 0;
-	                rx_done = 0;
-	            }
-	            // 2. 일반 데이터 비트 적재 구역
-	            else
-	            {
-	                // 이미 한 패킷(32비트) 처리가 끝나 메인 루프가 파싱 중이면 다음 리더 펄스 전까지 적재 중단
-	                if (rx_done == 0 && ir_idx < 32)
-	                {
-	                    ir_raw_buf[ir_idx++] = total_period;
-
-	                    if (ir_idx == 32)
-	                    {
-	                        rx_done = 1; // 메인 루프에게 즉시 파싱하라고 통보
-	                    }
-	                }
-	            }
-	        }
+	        IR_Handle_Interrupt(htim, &huart2);
 	    }
-
-
-  /*
-  if(htim==&htim3)
-    {
-      if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
-	{
-	  if(start_flag == 0 && 8000<(ir_val = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1)))
-	      {
-		if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2 && (4000<(ir_val = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2))))
-		  int len =sprintf(tx_buffer, "start\r\n");
-	      	  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-
-	      }
-	  //int len =sprintf(tx_buffer, "falling var: %d\r\n", ir_val);
-	  //HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-	}
-      else{
-	  ir_val = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2);
-	  //int len = sprintf(tx_buffer, "raising var: %d\r\n", ir_val);
-	  //HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-      }
-    }*/
 }
 /* USER CODE END PFP */
 
@@ -179,12 +114,14 @@ int main(void)
   HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_1);
   HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_2);
 
-  Servo_Set_Angle(TIM_CHANNEL_1,SET_CENTER);
-  Servo_Set_Angle(TIM_CHANNEL_2,SET_ZERO);
+  float s1_angle = SET_CENTER;
+  float s2_angle = SET_ZERO;
+  uint32_t active_channel = TIM_CHANNEL_1;
+
+  Servo_Set_Angle(&htim2, TIM_CHANNEL_1, s1_angle);
+  Servo_Set_Angle(&htim2, TIM_CHANNEL_2, s2_angle);
 
   uint32_t debug_counter = 0;	// set tera term
-
-  uint8_t target_key = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -192,62 +129,60 @@ int main(void)
 
   while (1)
   {
-    /*for(int i=0; i < 5; i++)
-      {
-	Servo_Set_Angle(TIM_CHANNEL_1,M1_Arr[i]);
-	Servo_Set_Angle(TIM_CHANNEL_2,M2_Arr[i]);
+	  if(remote_done_flag == 1)
+	  {
+		  int len;
+		  // 디코딩된 원본 키값 출력
+		  len = sprintf(tx_buffer, "\r\n[IR Key]: 0x%02X\r\n", remote_key);
+		  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
 
-	//int len = sprintf(tx_buffer, "STM32F103RB Alive! Count: %lu\r\n", debug_counter++);
-	//HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-	HAL_Delay(2000);
-      }*/
-	  if (rx_done == 1)
-	        {
-	            // 드라이버 함수 호출하여 32비트 데이터셋 기반 키 추출
-	            target_key = IR_Decode_Packet(ir_raw_buf, ir_idx);
-
-	            // 테라텀 로깅 및 검증
-	            int len = sprintf(tx_buffer, "\r\n[Decoded Key]: 0x%02X\r\n", target_key);
-	            HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-
-	            switch (target_key)
-	            {
-	                case IR_KEY_POWER:
-	                    len = sprintf(tx_buffer, ">> COMMAND: POWER BUTTON DETECTED <<\r\n");
-	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-	                    break;
-
-	                case IR_KEY_UP:
-	                    len = sprintf(tx_buffer, ">> COMMAND: MOVE UP <<\r\n");
-	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-	                    // Servo_Set_Angle(TIM_CHANNEL_1, ...); 연동
-	                    break;
-
-	                case IR_KEY_DOWN:
-	                    len = sprintf(tx_buffer, ">> COMMAND: MOVE DOWN <<\r\n");
-	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-	                    break;
-
-	                case IR_KEY_RIGHT:
-	                    len = sprintf(tx_buffer, ">> COMMAND: MOVE RIGHT <<\r\n");
-	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-	                    break;
-
-	                case IR_KEY_LEFT:
-	                    len = sprintf(tx_buffer, ">> COMMAND: MOVE LEFT <<\r\n");
-	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-	                    break;
-
-	                default:
-	                    len = sprintf(tx_buffer, ">> COMMAND: UNKNOWN KEY (0x%02X) <<\r\n", target_key);
-	                    HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
-	                    break;
-	            }
-
-	            // [중요] 디코딩 처리가 완료되었으므로, 다음 리모컨 패킷을 받기 위해 플래그 완전 초기화
-	            ir_idx = 0;
-	            rx_done = 0;
-	        }
+		  switch(remote_key)
+		  {
+		  	  case IR_KEY_LEFT:
+		  		  active_channel = TIM_CHANNEL_1;
+		  		  len = sprintf(tx_buffer, ">> Selected: SERVO 1 (CH1)\r\n");
+		  		  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+		  		  break;
+		  	  case IR_KEY_RIGHT:
+		  		  active_channel = TIM_CHANNEL_2;
+		  		  len = sprintf(tx_buffer, ">> Selected: SERVO 2 (CH2)\r\n");
+		  		  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+		  		  break;
+		  	  case IR_KEY_UP:
+		  		  if(active_channel == TIM_CHANNEL_1) {
+		  			  s1_angle += 10.0f;
+		  			  if(s1_angle > SET_LIMIT) s1_angle = SET_LIMIT;
+		  			  Servo_Set_Angle(&htim2, TIM_CHANNEL_1, s1_angle);
+		  			  len = sprintf(tx_buffer, ">> SERVO 1 Angle: %d\r\n", (int)s1_angle);
+		  		  } else {
+		  			  s2_angle += 10.0f;
+		  			  if(s2_angle > SET_LIMIT) s2_angle = SET_LIMIT;
+		  			  Servo_Set_Angle(&htim2, TIM_CHANNEL_2, s2_angle);
+		  			  len = sprintf(tx_buffer, ">> SERVO 2 Angle: %d\r\n", (int)s2_angle);
+		  		  }
+		  		  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+		  		  break;
+		  	  case IR_KEY_DOWN:
+		  		  if(active_channel == TIM_CHANNEL_1) {
+		  			  s1_angle -= 10.0f;
+		  			  if(s1_angle < SET_ZERO) s1_angle = SET_ZERO;
+		  			  Servo_Set_Angle(&htim2, TIM_CHANNEL_1, s1_angle);
+		  			  len = sprintf(tx_buffer, ">> SERVO 1 Angle: %d\r\n", (int)s1_angle);
+		  		  } else {
+		  			  s2_angle -= 10.0f;
+		  			  if(s2_angle < SET_ZERO) s2_angle = SET_ZERO;
+		  			  Servo_Set_Angle(&htim2, TIM_CHANNEL_2, s2_angle);
+		  			  len = sprintf(tx_buffer, ">> SERVO 2 Angle: %d\r\n", (int)s2_angle);
+		  		  }
+		  		  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+		  		  break;
+		  	  default:
+		  		  len = sprintf(tx_buffer, ">> COMMAND: UNKNOWN KEY (0x%02X) <<\r\n", remote_key);
+		  		  HAL_UART_Transmit(&huart2, (uint8_t *)tx_buffer, len, 100);
+		  		  break;
+		  }
+		  remote_done_flag = 0;
+	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
